@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Упрощенный инсталляционный скрипт для быстрой установки
+# Инсталляционный скрипт для RED OS 7.3
 
 set -e
 
@@ -10,103 +10,144 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-echo -e "${BLUE}========================================${NC}"
-echo -e "${BLUE}   Установка MFC Stats App             ${NC}"
-echo -e "${BLUE}========================================${NC}"
+echo -e "${RED}========================================${NC}"
+echo -e "${RED}   Установка MFC Stats App на RED OS 7.3${NC}"
+echo -e "${RED}========================================${NC}"
 
-# Определяем дистрибутив
-if [ -f /etc/os-release ]; then
-    . /etc/os-release
-    OS=$NAME
-    VER=$VERSION_ID
+# Проверяем, запущен ли скрипт от root
+if [ "$EUID" -ne 0 ]; then
+    echo -e "${YELLOW}Внимание: Рекомендуется запускать скрипт с правами root (sudo)${NC}"
+    read -p "Продолжить установку в домашнюю директорию? (y/N): " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        echo "Запустите скрипт снова с sudo: sudo ./install.sh"
+        exit 1
+    fi
+    USER_INSTALL=true
 else
-    OS=$(uname -s)
-    VER=$(uname -r)
+    USER_INSTALL=false
 fi
 
-echo -e "${YELLOW}Операционная система: $OS $VER${NC}"
+# Устанавливаем зависимости системы
+echo -e "${YELLOW}Установка системных зависимостей...${NC}"
+yum install -y python3 python3-devel python3-tkinter gcc gcc-c++ make
 
-# Проверяем Python
+# Проверяем установку Python3
 if ! command -v python3 &> /dev/null; then
-    echo -e "${RED}Ошибка: Python3 не найден${NC}"
-    echo -e "${YELLOW}Установка Python3...${NC}"
+    echo -e "${RED}Ошибка: Python3 не установлен${NC}"
+    exit 1
+fi
 
-    case $ID in
-        ubuntu|debian)
-            sudo apt update
-            sudo apt install -y python3 python3-pip python3-tk
-            ;;
-        fedora)
-            sudo dnf install -y python3 python3-pip python3-tkinter
-            ;;
-        centos|rhel)
-            sudo yum install -y python3 python3-pip python3-tkinter
-            ;;
-        *)
-            echo -e "${RED}Неизвестный дистрибутив. Установите Python3 вручную.${NC}"
-            exit 1
-            ;;
-    esac
+# Устанавливаем или обновляем pip
+echo -e "${YELLOW}Установка/обновление pip...${NC}"
+if ! command -v pip3 &> /dev/null; then
+    curl https://bootstrap.pypa.io/get-pip.py -o get-pip.py
+    python3 get-pip.py
+    rm -f get-pip.py
+else
+    pip3 install --upgrade pip
 fi
 
 # Устанавливаем зависимости Python
 echo -e "${YELLOW}Установка зависимостей Python...${NC}"
 pip3 install pandas openpyxl chardet
 
-# Создаем директорию для приложения
-INSTALL_DIR="$HOME/.local/share/mfc-stats-app"
-echo -e "${YELLOW}Установка в $INSTALL_DIR...${NC}"
-mkdir -p "$INSTALL_DIR"
+# Определяем директорию установки
+if [ "$USER_INSTALL" = true ]; then
+    INSTALL_DIR="$HOME/mfc-stats-app"
+    BIN_DIR="$HOME/.local/bin"
+    DESKTOP_DIR="$HOME/.local/share/applications"
+    ICON_DIR="$HOME/.local/share/icons"
+else
+    INSTALL_DIR="/opt/mfc-stats-app"
+    BIN_DIR="/usr/local/bin"
+    DESKTOP_DIR="/usr/share/applications"
+    ICON_DIR="/usr/share/icons"
+fi
 
-# Копируем исходный код
-echo -e "${YELLOW}Копирование файлов...${NC}"
+# Создаем директории
+echo -e "${YELLOW}Создание директорий...${NC}"
+mkdir -p "$INSTALL_DIR"
+mkdir -p "$BIN_DIR"
+mkdir -p "$DESKTOP_DIR"
+mkdir -p "$ICON_DIR/hicolor/256x256/apps"
+
+# Копируем файлы приложения
+echo -e "${YELLOW}Копирование файлов приложения...${NC}"
 cp -r src/* "$INSTALL_DIR/"
 cp README.md "$INSTALL_DIR/"
 
+# Создаем иконку если нет
+if [ ! -f "icons/mfc-stats-app.png" ]; then
+    echo -e "${YELLOW}Создание иконки приложения...${NC}"
+    # Создаем простую иконку с помощью Python
+    python3 -c "
+import tkinter as tk
+from PIL import Image, ImageDraw, ImageFont
+import os
+
+# Создаем изображение 256x256
+img = Image.new('RGB', (256, 256), color=(0, 120, 215))
+draw = ImageDraw.Draw(img)
+
+# Сохраняем
+os.makedirs('icons', exist_ok=True)
+img.save('icons/mfc-stats-app.png')
+print('Иконка создана')
+" || echo "Создание иконки пропущено"
+fi
+
+# Копируем иконку если существует
+if [ -f "icons/mfc-stats-app.png" ]; then
+    cp icons/mfc-stats-app.png "$ICON_DIR/hicolor/256x256/apps/"
+fi
+
 # Создаем launch скрипт
 echo -e "${YELLOW}Создание launch скрипта...${NC}"
-cat > "$INSTALL_DIR/launch.sh" << 'EOF'
+cat > "$INSTALL_DIR/mfc-stats-app" << 'EOF'
 #!/bin/bash
 cd "$(dirname "$0")"
 python3 mfc_stats_app.py
 EOF
 
-chmod +x "$INSTALL_DIR/launch.sh"
+chmod +x "$INSTALL_DIR/mfc-stats-app"
 
 # Создаем символическую ссылку
 echo -e "${YELLOW}Создание символической ссылки...${NC}"
-mkdir -p "$HOME/.local/bin"
-ln -sf "$INSTALL_DIR/launch.sh" "$HOME/.local/bin/mfc-stats-app"
+ln -sf "$INSTALL_DIR/mfc-stats-app" "$BIN_DIR/mfc-stats-app"
 
-# Добавляем ~/.local/bin в PATH если его там нет
-if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
-    echo -e "${YELLOW}Добавление ~/.local/bin в PATH...${NC}"
-    echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc"
-    echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.profile"
-    export PATH="$HOME/.local/bin:$PATH"
-fi
-
-# Создаем desktop файл для меню приложений
-echo -e "${YELLOW}Создание ярлыка в меню приложений...${NC}"
-mkdir -p "$HOME/.local/share/applications"
-
-cat > "$HOME/.local/share/applications/mfc-stats-app.desktop" << EOF
+# Создаем desktop файл
+echo -e "${YELLOW}Создание файла запуска для меню приложений...${NC}"
+cat > "$DESKTOP_DIR/mfc-stats-app.desktop" << EOF
 [Desktop Entry]
 Version=1.0
 Type=Application
 Name=MFC Stats App
 Comment=Приложение для анализа статистики филиалов МФЦ
-Exec=$HOME/.local/bin/mfc-stats-app
-Icon=utilities-terminal
+Exec=$BIN_DIR/mfc-stats-app
+Icon=mfc-stats-app
 Terminal=false
 Categories=Utility;Office;
 Keywords=MFC;статистика;анализ;филиалы;
 StartupNotify=true
 EOF
 
-# Обновляем кэш desktop файлов
+# Обновляем кэш иконок и desktop файлов
+echo -e "${YELLOW}Обновление кэша системы...${NC}"
+if command -v gtk-update-icon-cache &> /dev/null; then
+    gtk-update-icon-cache -f "$ICON_DIR/hicolor"
+fi
+
 if command -v update-desktop-database &> /dev/null; then
-    update-desktop-database "$HOME/.local/share/applications"
+    update-desktop-database "$DESKTOP_DIR"
+fi
+
+# Добавляем BIN_DIR в PATH если его там нет (для пользовательской установки)
+if [ "$USER_INSTALL" = true ] && [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
+    echo -e "${YELLOW}Добавление $BIN_DIR в PATH...${NC}"
+    echo "export PATH=\"\$PATH:$BIN_DIR\"" >> "$HOME/.bashrc"
+    echo "export PATH=\"\$PATH:$BIN_DIR\"" >> "$HOME/.bash_profile"
+    export PATH="$PATH:$BIN_DIR"
 fi
 
 echo -e "${BLUE}========================================${NC}"
@@ -117,9 +158,24 @@ echo -e "${YELLOW}Запустить приложение можно следу�
 echo "1. Из терминала: mfc-stats-app"
 echo "2. Из меню приложений: MFC Stats App"
 echo ""
+echo -e "${YELLOW}Директория установки: $INSTALL_DIR${NC}"
+echo ""
+if [ "$USER_INSTALL" = true ]; then
+    echo -e "${YELLOW}Для обновления PATH выполните:${NC}"
+    echo "  source ~/.bashrc"
+    echo ""
+fi
 echo -e "${YELLOW}Для удаления приложения выполните:${NC}"
-echo "  rm -rf $INSTALL_DIR"
-echo "  rm -f $HOME/.local/bin/mfc-stats-app"
-echo "  rm -f $HOME/.local/share/applications/mfc-stats-app.desktop"
+if [ "$USER_INSTALL" = true ]; then
+    echo "  rm -rf $INSTALL_DIR"
+    echo "  rm -f $BIN_DIR/mfc-stats-app"
+    echo "  rm -f $DESKTOP_DIR/mfc-stats-app.desktop"
+    echo "  rm -f $ICON_DIR/hicolor/256x256/apps/mfc-stats-app.png"
+else
+    echo "  sudo rm -rf $INSTALL_DIR"
+    echo "  sudo rm -f $BIN_DIR/mfc-stats-app"
+    echo "  sudo rm -f $DESKTOP_DIR/mfc-stats-app.desktop"
+    echo "  sudo rm -f $ICON_DIR/hicolor/256x256/apps/mfc-stats-app.png"
+fi
 echo ""
 echo -e "${BLUE}========================================${NC}"
